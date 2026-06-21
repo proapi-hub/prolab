@@ -5,6 +5,8 @@ import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/fil
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { buildApiUrl, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { inferModelInfo } from "@/lib/pro-spec/model-inference";
+import { buildRequest, isGrokImagineVideo } from "@/lib/pro-spec/provider-adapter";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -20,7 +22,7 @@ type ApiEnvelope<T> = T | { code?: number; data?: T | null; msg?: string };
 type RequestOptions = { signal?: AbortSignal };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "direct"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -55,6 +57,10 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
     }
+    const inferredApiFormat = inferModelInfo(requestConfig.model).apiFormat;
+    if (inferredApiFormat === "grok-video-chat" || (inferredApiFormat === "openai-video" && isGrokImagineVideo(requestConfig.model))) {
+        return createGrokVideoTask(requestConfig, selectedModel, prompt, references, options);
+    }
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
@@ -64,6 +70,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);
+    if (task.provider === "direct") return { status: "completed", result: { url: task.id, mimeType: "video/mp4" } };
     return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
 }
 
@@ -89,6 +96,31 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
         return { id: created.id, provider: "openai", model };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
+    }
+}
+
+async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    try {
+        const providerRequest = buildRequest({
+            modelId: config.model,
+            prompt,
+            images: references.map((image) => image.url || image.dataUrl).filter(Boolean),
+            modelParams: {
+                duration: Number(config.videoSeconds) || 6,
+                size: normalizeVideoSize(config.size),
+                resolutionName: normalizeVideoResolution(config.vquality),
+                preset: "normal",
+            },
+            baseUrl: config.baseUrl,
+            apiKey: config.apiKey,
+        });
+        const response = await fetch(providerRequest.url, { ...providerRequest.init, signal: options?.signal });
+        const parsed = await providerRequest.parseResponse(response);
+        if (parsed.error) throw new Error(parsed.error);
+        if (!parsed.resourceUrl) throw new Error("视频接口没有返回任务 ID 或视频 URL");
+        return { id: parsed.resourceUrl, provider: providerRequest.apiFormat === "grok-video-chat" ? "direct" : "openai", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
     }
 }
 
