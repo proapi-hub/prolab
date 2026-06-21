@@ -752,7 +752,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         formData.set("size", requestSize);
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => formData.append("image", file));
+    // 多图走 OpenAI 数组字段 image[]，单图保持 image（避免 newapi 网关多图按非数组解析返回 422）。
+    const imageField = files.length > 1 ? "image[]" : "image";
+    files.forEach((file) => formData.append(imageField, file));
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     try {

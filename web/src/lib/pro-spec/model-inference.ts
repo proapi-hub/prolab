@@ -198,7 +198,8 @@ const IMAGE_MODEL_PATTERNS = [
   /kandinsky/i,
   // 通用图像关键词：命中 qwen-image-*、wan2-7-image、grok-imagine-image* 等
   // 安全：'image' 不是 'imagine' 的子串，不会误伤 grok-imagine / grok-imagine-video
-  /image/i,
+  // 排除图生视频变体（如 grok-image-video）：'image' 后跟 'video' 的交由视频规则处理
+  /image(?!.*video)/i,
   // 裸 grok-imagine（排除 video 变体）归图像
   /grok-imagine(?!.*video)/i,
 ]
@@ -217,6 +218,8 @@ const VIDEO_MODEL_PATTERNS = [
   /grok-video-chat/i,
   /grok.*video.*chat/i,
   /imagine.*video/i,
+  // 图生视频命名（grok-image-video、xxx-image-to-video 等）
+  /image.*video/i,
   /agnes.*video/i,
 ]
 
@@ -415,8 +418,8 @@ export function inferApiFormat(modelId: string): ApiFormat {
   // Agnes 视频走 OpenAI Video 协议（/v1/videos）
   if (/agnes.*video/.test(id)) return 'openai-video'
   if (/grok-video-chat|grok.*video.*chat/.test(id)) return 'grok-video-chat'
-  // Grok Video（grok-imagine-video / grok-imagine1.5-video 等）
-  if (/grok-imagine.*video/.test(id)) return 'openai-video'
+  // Grok Video（grok-imagine-video / grok-imagine1.5-video / grok-image-video 等）
+  if (/grok-imag(?:e|ine).*video/.test(id)) return 'openai-video'
   // OpenAI Images API 兼容（/v1/images/generations）：
   // ProAPI 风格图像统一走 dalle 格式。在 gemini 规则之前匹配，
   // 因为 nano-banana / imagen 是 Google 系图像但仍走 dalle 兼容协议。

@@ -41,7 +41,8 @@ export function buildRequest(opts: BuildRequestOptions): ProviderRequest {
 }
 
 export function isGrokImagineVideo(modelId: string) {
-    return /grok.*imagine.*video|grok-imagine-video/i.test(modelId);
+    // 兼容两种拼写：grok-imagine-video（官方）与 grok-image-video（部分聚合商命名）
+    return /grok.*imag(?:e|ine).*video/i.test(modelId);
 }
 
 function buildDalleRequest(opts: BuildRequestOptions, apiFormat: ApiFormat): ProviderRequest {
@@ -78,7 +79,10 @@ function buildDalleEditRequest(opts: BuildRequestOptions, apiFormat: ApiFormat):
         responseFormat: "b64_json",
     });
     appendFormFields(form, body);
-    for (const file of imageFiles) form.append("image", file);
+    // 多图融合走 OpenAI 数组字段 image[]（gpt-image 系列最多 16 张）；单图保持 image 以兼容 dall-e-2 等只认单字段的模型。
+    // 用同名 image 重复 append 会被 newapi 网关按非数组解析，多图时固定返回 422 Unprocessable Content。
+    const imageField = imageFiles.length > 1 ? "image[]" : "image";
+    for (const file of imageFiles) form.append(imageField, file);
     if (opts.mask) form.append("mask", opts.mask);
     return {
         apiFormat,

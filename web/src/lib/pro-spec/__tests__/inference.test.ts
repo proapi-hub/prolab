@@ -27,6 +27,13 @@ describe("pro-spec inference", () => {
         expect(openaiVideo.group).toBe("xAI");
         expect(openaiVideo.apiFormat).toBe("openai-video");
 
+        // grok-image-video：部分聚合商把图生视频模型命名为 image 而非 imagine，
+        // 不能被宽泛的 /image/ 规则误判为图像（否则视频节点下拉框为空 → 误弹配置框）
+        const imageVideo = inferModelInfo("grok-image-video");
+        expect(imageVideo.category).toBe("video");
+        expect(imageVideo.group).toBe("xAI");
+        expect(imageVideo.apiFormat).toBe("openai-video");
+
         const chatVideo = inferModelInfo("grok-video-chat");
         expect(chatVideo.category).toBe("video");
         expect(chatVideo.group).toBe("xAI");
@@ -139,6 +146,24 @@ describe("pro-spec provider adapter", () => {
         expect(form.getAll("image").length).toBe(1);
     });
 
+    test("uses image[] array field when editing with multiple reference images", () => {
+        const request = buildRequest({
+            operation: "edit",
+            modelId: "gpt-image-2",
+            prompt: "merge these",
+            imageFiles: [
+                new File(["a"], "ref1.png", { type: "image/png" }),
+                new File(["b"], "ref2.png", { type: "image/png" }),
+            ],
+            baseUrl: "https://newapi.prorisehub.com",
+            apiKey: "sk-test",
+        });
+        const form = request.init.body as FormData;
+        // 多图必须走 image[] 数组字段，否则 newapi 网关返回 422
+        expect(form.getAll("image[]").length).toBe(2);
+        expect(form.getAll("image").length).toBe(0);
+    });
+
     test("rejects masks for non-mask image edit models", () => {
         let errorMessage = "";
         try {
@@ -171,6 +196,20 @@ describe("pro-spec provider adapter", () => {
             errorMessage = error instanceof Error ? error.message : "";
         }
         expect(errorMessage.includes("Grok 视频参考图需要公网 URL")).toBe(true);
+    });
+
+    test("routes grok-image-video to the Grok video endpoint", () => {
+        const request = buildRequest({
+            modelId: "grok-image-video",
+            prompt: "video",
+            baseUrl: "https://newapi.prorisehub.com",
+            apiKey: "sk-test",
+        });
+        expect(request.apiFormat).toBe("openai-video");
+        expect(request.url).toBe("https://newapi.prorisehub.com/v1/videos");
+        expect(request.init.method).toBe("POST");
+        const form = request.init.body as FormData;
+        expect(form.get("model")).toBe("grok-image-video");
     });
 });
 
