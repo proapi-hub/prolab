@@ -3,7 +3,17 @@ import axios from "axios";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
-import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
+import {
+    boolConfig,
+    buildSeedancePromptText,
+    isSeedanceNativeTaskBaseUrl,
+    isSeedanceVideoConfig,
+    normalizeSeedanceDuration,
+    normalizeSeedanceRatio,
+    normalizeSeedanceResolution,
+    seedanceVideoReferenceError,
+    SEEDANCE_REFERENCE_LIMITS,
+} from "@/lib/seedance-video";
 import { buildApiUrl, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import { inferModelInfo } from "@/lib/pro-spec/model-inference";
 import { buildRequest, isGrokImagineVideo } from "@/lib/pro-spec/provider-adapter";
@@ -140,6 +150,9 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
 }
 
 async function createSeedanceTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    if (!isSeedanceNativeTaskBaseUrl(config.baseUrl)) {
+        return createSeedanceViaNewApiTask(config, model, prompt, references, videoReferences, audioReferences, options);
+    }
     if (audioReferences.length && !references.length && !videoReferences.length) {
         throw new Error("Seedance 参考音频不能单独使用，请同时添加参考图或参考视频");
     }
@@ -167,6 +180,9 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
 }
 
 async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    if (!isSeedanceNativeTaskBaseUrl(config.baseUrl)) {
+        return pollSeedanceViaNewApiTask(config, task, options);
+    }
     try {
         const state = unwrapSeedanceTask((await axios.get<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, task.id), { headers: aiHeaders(config), signal: options?.signal })).data);
         if (state.status === "succeeded") {
@@ -205,6 +221,100 @@ function assertSeedanceAudioReferences(audioReferences: ReferenceAudio[]) {
 
 function seedanceApiUrl(config: AiConfig, taskId?: string) {
     return buildApiUrl(config.baseUrl, `/contents/generations/tasks${taskId ? `/${encodeURIComponent(taskId)}` : ""}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New-API 代理路径：New-API 不暴露火山原生 /contents/generations/tasks（404），
+// Seedance 走 OpenAI 风格 /v1/video/generations（扁平 prompt）。create 返回扁平对象，
+// 查询返回 New-API 信封 {code,message,data}，data.status 为大写 SUCCESS/FAILURE。
+// ─────────────────────────────────────────────────────────────────────────────
+type NewApiVideoData = {
+    id?: string;
+    task_id?: string;
+    status?: string;
+    result_url?: string;
+    fail_reason?: string;
+    error?: { message?: string } | null;
+    url?: string;
+    data?: { url?: string } | null;
+};
+
+function extractNewApiVideoData(payload: unknown): NewApiVideoData {
+    if (payload && typeof payload === "object") {
+        const inner = (payload as { data?: unknown }).data;
+        if (inner && typeof inner === "object" && ("status" in inner || "task_id" in inner || "url" in inner)) {
+            return inner as NewApiVideoData;
+        }
+        return payload as NewApiVideoData;
+    }
+    return {};
+}
+
+async function createSeedanceViaNewApiTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    if (videoReferences.length || audioReferences.length) {
+        throw new Error("通过 New-API 代理的 Seedance 暂不支持参考视频/音频，请改用直连火山 Ark / PixVerse（/api/v3 或 /api/plan/v3）配置，或移除参考视频与音频");
+    }
+    const text = prompt.trim();
+    const images: string[] = [];
+    for (const image of references.slice(0, SEEDANCE_REFERENCE_LIMITS.images)) {
+        images.push(await resolveSeedanceImageUrl(config, image));
+    }
+    if (!text && !images.length) throw new Error("请输入视频提示词，或连接参考图片");
+    // New-API（sora 出向）对该路径是原始 body 透传，仅改写 model，字段名以上游 PixVerse
+    // VideoCreateRequest 契约为准：seconds（非 duration）、aspect_ratio（非 ratio）、
+    // input_reference（非 images）。放错字段会被上游静默丢弃并回退默认值。
+    const seconds = normalizeSeedanceDuration(config.videoSeconds);
+    const ratio = normalizeSeedanceRatio(config.size);
+    const payload: Record<string, unknown> = {
+        model: modelOptionName(model),
+        prompt: text,
+        resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
+        generate_audio: boolConfig(config.videoGenerateAudio, true),
+    };
+    if (seconds > 0) payload.seconds = seconds;
+    if (ratio && ratio !== "adaptive") payload.aspect_ratio = ratio;
+    if (images.length) payload.input_reference = images;
+    try {
+        const created = extractNewApiVideoData((await axios.post(aiApiUrl(config, "/video/generations"), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
+        const id = created.id || created.task_id;
+        if (!id) throw new Error("Seedance 接口没有返回任务 ID");
+        return { id, provider: "seedance", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Seedance 任务创建失败"));
+    }
+}
+
+async function pollSeedanceViaNewApiTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    try {
+        const raw = (await axios.get(aiApiUrl(config, `/video/generations/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config), signal: options?.signal })).data;
+        const data = extractNewApiVideoData(raw);
+        const status = String(data.status || "").toUpperCase();
+        if (status === "SUCCESS" || status === "COMPLETED") {
+            const result = await newApiVideoResult(config, data.result_url, data.data?.url || data.url, options);
+            return { status: "completed", result };
+        }
+        if (status === "FAILURE" || status === "FAILED" || status === "CANCELLED" || status === "EXPIRED") {
+            return { status: "failed", error: data.fail_reason || data.error?.message || "Seedance 视频生成失败" };
+        }
+        return { status: "pending" };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Seedance 任务查询失败"));
+    }
+}
+
+async function newApiVideoResult(config: AiConfig, resultUrl: string | undefined, cdnUrl: string | undefined, options?: RequestOptions): Promise<VideoGenerationResult> {
+    // 优先用带鉴权的 result_url（CDN 直链有防盗链会 403）
+    if (resultUrl) {
+        try {
+            const resp = await axios.get<Blob>(resultUrl, { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
+            await assertVideoBlob(resp.data);
+            return { blob: resp.data };
+        } catch (error) {
+            if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        }
+    }
+    if (cdnUrl) return videoResultFromUrl(cdnUrl, options);
+    throw new Error("Seedance 任务成功但没有返回视频地址");
 }
 
 async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
