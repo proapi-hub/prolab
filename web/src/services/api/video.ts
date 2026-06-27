@@ -271,9 +271,13 @@ async function createSeedanceViaNewApiTask(config: AiConfig, model: string, prom
         resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
         generate_audio: boolConfig(config.videoGenerateAudio, true),
     };
-    if (seconds > 0) payload.seconds = seconds;
+    // New-API TaskSubmitReq.seconds 是 string 字段(发数字会 invalid_json），且上游 PixVerse
+    // 只读 seconds（无 duration）。故必须发字符串 seconds，不能发 duration。
+    if (seconds > 0) payload.seconds = String(seconds);
     if (ratio && ratio !== "adaptive") payload.aspect_ratio = ratio;
-    if (images.length) payload.input_reference = images;
+    // New-API input_reference 是单 string 字段（发数组会同样 invalid_json），上游也只认
+    // input_reference；经 New-API 代理时多图参考无法承载，取首图（多图请用直连 Ark/PixVerse）。
+    if (images.length) payload.input_reference = images[0];
     try {
         const created = extractNewApiVideoData((await axios.post(aiApiUrl(config, "/video/generations"), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = created.id || created.task_id;
