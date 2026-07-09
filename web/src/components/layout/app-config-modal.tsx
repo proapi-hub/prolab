@@ -1,5 +1,5 @@
-import { App, Button, Form, Input, Modal, Progress, Select, Switch, Tabs } from "antd";
-import { CircleAlert, Cloud, KeyRound, Link2, Plus, RefreshCw, ShieldCheck, Trash2, Wifi } from "lucide-react";
+import { App, Button, Checkbox, Form, Input, Modal, Progress, Select, Switch, Tabs } from "antd";
+import { CircleAlert, Cloud, KeyRound, Link2, Plus, RefreshCw, ShieldCheck, Trash2, WandSparkles, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ModelPicker } from "@/components/model-picker";
@@ -582,31 +582,6 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                     </Button>
                 </div>
             ) : null}
-        </>
-    );
-}
-
-export function AppConfigModal() {
-    const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
-    const configTab = useConfigStore((state) => state.configTab);
-    const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
-    return (
-        <Modal
-            title={
-                <div>
-                    <div className="text-lg font-semibold">配置与用户偏好</div>
-                    <div className="mt-1 text-xs font-normal text-stone-500">渠道聚合、模型选择和同步偏好</div>
-                </div>
-            }
-            open={isConfigOpen}
-            width={980}
-            centered
-            onCancel={() => setConfigDialogOpen(false)}
-            styles={{ body: { maxHeight: "72vh", overflowY: "auto", paddingRight: 12 } }}
-            footer={null}
-        >
-            <AppConfigPanel showDoneButton initialTab={configTab} />
-        </Modal>
         <QuickConnectModal open={quickConnectOpen} onClose={() => setQuickConnectOpen(false)} />
         <Modal
             title="选择要保存的模型"
@@ -649,6 +624,30 @@ export function AppConfigModal() {
             ) : null}
         </Modal>
         </>
+    );
+}
+
+export function AppConfigModal() {
+    const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
+    const configTab = useConfigStore((state) => state.configTab);
+    const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
+    return (
+        <Modal
+            title={
+                <div>
+                    <div className="text-lg font-semibold">配置与用户偏好</div>
+                    <div className="mt-1 text-xs font-normal text-stone-500">渠道聚合、模型选择和同步偏好</div>
+                </div>
+            }
+            open={isConfigOpen}
+            width={980}
+            centered
+            onCancel={() => setConfigDialogOpen(false)}
+            styles={{ body: { maxHeight: "72vh", overflowY: "auto", paddingRight: 12 } }}
+            footer={null}
+        >
+            <AppConfigPanel showDoneButton initialTab={configTab} />
+        </Modal>
     );
 }
 

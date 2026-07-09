@@ -1,9 +1,12 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Clapperboard, ImageIcon, MessageSquareText, Server, Share2, Sparkles, type LucideIcon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { App, Button, Image, Tag } from "antd";
 import { Link, useNavigate } from "react-router-dom";
 
 import { APP_VERSION, DOCS_URL } from "@/constant/env";
+import { navigationTools } from "@/constant/navigation-tools";
+import { cn } from "@/lib/utils";
+import { type Prompt } from "@/services/api/prompts";
 import { useConfigStore } from "@/stores/use-config-store";
 
 type HomeFeature = {
@@ -201,7 +204,7 @@ export default function IndexPage() {
                             }
 
                             return (
-                                <Link key={feature.title} href={feature.href} className="group bg-background p-6 transition hover:bg-accent">
+                                <Link key={feature.title} to={feature.href} className="group bg-background p-6 transition hover:bg-accent">
                                     {inner}
                                 </Link>
                             );
@@ -233,7 +236,7 @@ export default function IndexPage() {
 
             <footer className="relative border-t border-border bg-background">
                 <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 px-6 py-8 text-sm text-muted-foreground md:flex-row">
-                    <div>© {year} ProLab · Pro Canvas for ProAPI</div>
+                    <div>© {new Date().getFullYear()} ProLab · Pro Canvas for ProAPI</div>
                     <div className="flex flex-wrap items-center justify-center gap-5">
                         <button type="button" onClick={openConfig} className="transition hover:text-foreground">
                             设置
